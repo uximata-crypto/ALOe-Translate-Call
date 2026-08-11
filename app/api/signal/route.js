@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { get, put, del } from '@vercel/blob';
+import { getVercelOidcToken } from '@vercel/oidc';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -18,20 +19,31 @@ function pathname(room, secret, kind) {
   return `aloe-signals/${roomHash(room, secret)}/${kind}.json`;
 }
 
-// Prefer the static read-write token when Vercel exposes it for this store.
-// This bypasses any stale/mismatched OIDC credential on an older deployment.
-// If no static token is available, use the Vercel OIDC pair explicitly.
-function blobAuth() {
+// On Vercel Functions the OIDC token is provided at runtime via the
+// x-vercel-oidc-token request context. @vercel/oidc resolves it correctly.
+// A static Blob token remains a supported fallback if Vercel exposes one.
+async function blobAuth() {
   if (process.env.BLOB_READ_WRITE_TOKEN) {
     return { token: process.env.BLOB_READ_WRITE_TOKEN };
   }
-  if (process.env.VERCEL_OIDC_TOKEN && process.env.BLOB_STORE_ID) {
-    return {
-      oidcToken: process.env.VERCEL_OIDC_TOKEN,
-      storeId: process.env.BLOB_STORE_ID,
-    };
+
+  const storeId = process.env.BLOB_STORE_ID;
+  if (!storeId) {
+    throw new Error('BLOB_STORE_ID não está disponível. Confirme que o Blob está ligado a Production/Preview e faça Redeploy.');
   }
-  throw new Error('Credenciais do Vercel Blob não estão disponíveis neste deployment. Ligue o Blob ao projeto e faça um novo deployment.');
+
+  let oidcToken;
+  try {
+    oidcToken = await getVercelOidcToken();
+  } catch (error) {
+    throw new Error(`Não foi possível obter o token OIDC do Vercel: ${error?.message || 'erro desconhecido'}`);
+  }
+
+  if (!oidcToken) {
+    throw new Error('Token OIDC do Vercel não está disponível nesta Function. Faça um novo deployment depois de ligar o Blob.');
+  }
+
+  return { oidcToken, storeId };
 }
 
 export async function POST(request) {
@@ -46,6 +58,7 @@ export async function POST(request) {
       return Response.json({ error: 'SDP inválido.' }, { status: 400 });
     }
 
+    const auth = await blobAuth();
     await put(
       pathname(room, secret, kind),
       JSON.stringify({ sdp, createdAt: Date.now() }),
@@ -55,7 +68,7 @@ export async function POST(request) {
         allowOverwrite: true,
         contentType: 'application/json',
         cacheControlMaxAge: 60,
-        ...blobAuth(),
+        ...auth,
       },
     );
 
@@ -76,10 +89,11 @@ export async function GET(request) {
     const kind = url.searchParams.get('kind') || '';
     validate(room, secret, kind);
 
+    const auth = await blobAuth();
     const result = await get(pathname(room, secret, kind), {
       access: 'private',
       useCache: false,
-      ...blobAuth(),
+      ...auth,
     });
 
     if (!result || result.statusCode !== 200) {
@@ -104,9 +118,10 @@ export async function DELETE(request) {
     const room = url.searchParams.get('room') || '';
     const secret = url.searchParams.get('secret') || '';
     validate(room, secret, 'offer');
+    const auth = await blobAuth();
     await del(
       [pathname(room, secret, 'offer'), pathname(room, secret, 'answer')],
-      blobAuth(),
+      auth,
     ).catch(() => {});
     return Response.json({ ok: true }, { headers: { 'Cache-Control': 'no-store' } });
   } catch {
