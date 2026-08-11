@@ -26,17 +26,19 @@ export async function GET() {
   return Response.json({
     ok: true,
     app: 'ALOe Translate Call',
-    version: '1.0.3',
-    openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
+    version: '1.1.0-gemini',
+    translationEngine: 'gemini-3.5-live-translate-preview',
+    geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
     signaling: 'vercel-private-blob',
     blobAuthMode,
     blobStoreIdConfigured: hasStoreId,
     vercelOidcAvailable: oidcAvailable,
     vercelOidcSource: oidcSource,
     blobStaticTokenConfigured: hasStaticToken,
-    productionReady: Boolean(process.env.OPENAI_API_KEY) && blobAuthMode !== 'missing',
+    productionReady: Boolean(process.env.GEMINI_API_KEY) && blobAuthMode !== 'missing',
     upstashRequired: false,
+    openaiRequired: false,
     publicProductionUrl: process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : 'https://al-oe-translate-call-woad.vercel.app',
-    languages: ['pt', 'es', 'en', 'fr', 'de', 'ko', 'zh'],
+    languages: ['pt-PT', 'es', 'en', 'fr', 'de', 'ko', 'zh-Hans'],
   }, { headers: { 'Cache-Control': 'no-store' } });
 }
