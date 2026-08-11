@@ -387,7 +387,8 @@ export default function Home() {
     geminiProcessorRef.current = processor;
     geminiSilentGainRef.current = silentGain;
 
-    const endpoint = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=${encodeURIComponent(session.token)}`;
+    const apiVersion = session.apiVersion || 'v1beta';
+    const endpoint = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.${apiVersion}.GenerativeService.BidiGenerateContentConstrained?access_token=${encodeURIComponent(session.token)}`;
     const ws = new WebSocket(endpoint);
     geminiWsRef.current = ws;
 
