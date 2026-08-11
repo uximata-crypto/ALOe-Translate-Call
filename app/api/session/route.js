@@ -26,25 +26,16 @@ export async function POST(request) {
     }
 
     const now = Date.now();
+    // Fluxo compatível com o exemplo oficial Google de ephemeral tokens:
+    // cria um token curto e de uma utilização; a configuração Live Translate
+    // é enviada no setup inicial do WebSocket pelo cliente.
     const tokenRequest = {
       uses: 1,
       expireTime: new Date(now + 30 * 60 * 1000).toISOString(),
       newSessionExpireTime: new Date(now + 60 * 1000).toISOString(),
-      liveConnectConstraints: {
-        model: `models/${MODEL}`,
-        config: {
-          responseModalities: ['AUDIO'],
-          inputAudioTranscription: {},
-          outputAudioTranscription: {},
-          translationConfig: {
-            targetLanguageCode,
-            echoTargetLanguage: true,
-          },
-        },
-      },
     };
 
-    const response = await fetch('https://generativelanguage.googleapis.com/v1beta/auth_tokens', {
+    const response = await fetch('https://generativelanguage.googleapis.com/v1alpha/auth_tokens', {
       method: 'POST',
       headers: {
         'x-goog-api-key': process.env.GEMINI_API_KEY,
@@ -67,6 +58,7 @@ export async function POST(request) {
     return Response.json({
       token: payload.name,
       model: MODEL,
+      apiVersion: 'v1alpha',
       targetLanguageCode,
     }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
