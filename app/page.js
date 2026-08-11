@@ -387,7 +387,7 @@ export default function Home() {
     geminiProcessorRef.current = processor;
     geminiSilentGainRef.current = silentGain;
 
-    const endpoint = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token=${encodeURIComponent(session.token)}`;
+    const endpoint = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=${encodeURIComponent(session.token)}`;
     const ws = new WebSocket(endpoint);
     geminiWsRef.current = ws;
 
@@ -619,7 +619,7 @@ export default function Home() {
       </section>
 
       <footer>
-        <span>ALOe Translate Call v1.1.0 · Gemini</span>
+        <span>ALOe Translate Call v1.1.1 · Gemini</span>
         <span>ES · EN · FR · DE · KO · ZH</span>
       </footer>
 
