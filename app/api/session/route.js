@@ -15,13 +15,19 @@ const TARGET_CODES = {
 
 export async function POST(request) {
   try {
+    // Confirmar que a chave Gemini está configurada no Vercel
     if (!process.env.GEMINI_API_KEY) {
       return Response.json(
-        { error: 'GEMINI_API_KEY não configurada no Vercel.' },
-        { status: 500 }
+        {
+          error: 'GEMINI_API_KEY não configurada no Vercel.',
+        },
+        {
+          status: 500,
+        }
       );
     }
 
+    // Ler os dados enviados pela aplicação
     const body = await request.json();
 
     const requested = String(
@@ -33,13 +39,18 @@ export async function POST(request) {
 
     if (!targetLanguageCode) {
       return Response.json(
-        { error: 'Idioma de destino inválido.' },
-        { status: 400 }
+        {
+          error: 'Idioma de destino inválido.',
+        },
+        {
+          status: 400,
+        }
       );
     }
 
     const now = Date.now();
 
+    // Token temporário Gemini Live Translate
     const tokenRequest = {
       uses: 1,
 
@@ -57,20 +68,24 @@ export async function POST(request) {
         generationConfig: {
           responseModalities: ['AUDIO'],
 
-          inputAudioTranscription: {},
-
-          outputAudioTranscription: {},
-
           translationConfig: {
             targetLanguageCode,
             echoTargetLanguage: true,
           },
         },
+
+        // ATENÇÃO:
+        // estes dois campos ficam FORA de generationConfig
+        inputAudioTranscription: {},
+
+        outputAudioTranscription: {},
       },
     };
 
+    // Para Gemini Live Translate + ephemeral token:
+    // usar atualmente v1alpha
     const response = await fetch(
-      'https://generativelanguage.googleapis.com/v1beta/auth_tokens',
+      'https://generativelanguage.googleapis.com/v1alpha/auth_tokens',
       {
         method: 'POST',
 
@@ -134,9 +149,15 @@ export async function POST(request) {
     return Response.json(
       {
         token: payload.name,
+
         model: MODEL,
-        apiVersion: 'v1beta',
+
+        // IMPORTANTE:
+        // page.js já lê este valor automaticamente
+        apiVersion: 'v1alpha',
+
         targetLanguageCode,
+
         setupLocked: true,
       },
       {
@@ -148,7 +169,7 @@ export async function POST(request) {
     );
   } catch (error) {
     console.error(
-      'Erro /api/session:',
+      'Erro /api/session Gemini:',
       error
     );
 
