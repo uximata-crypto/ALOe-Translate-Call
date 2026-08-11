@@ -15,62 +15,46 @@ const TARGET_CODES = {
 
 export async function POST(request) {
   try {
-    // 1. Confirmar que a chave Gemini existe no servidor
     if (!process.env.GEMINI_API_KEY) {
       return Response.json(
-        {
-          error: 'GEMINI_API_KEY não configurada no Vercel.',
-        },
-        {
-          status: 500,
-        }
+        { error: 'GEMINI_API_KEY não configurada no Vercel.' },
+        { status: 500 }
       );
     }
 
-    // 2. Ler idioma de destino enviado pela aplicação
     const body = await request.json();
 
     const requested = String(
       body?.targetLanguage || ''
     ).trim();
 
-    const targetLanguageCode = TARGET_CODES[requested];
+    const targetLanguageCode =
+      TARGET_CODES[requested];
 
     if (!targetLanguageCode) {
       return Response.json(
-        {
-          error: 'Idioma de destino inválido.',
-        },
-        {
-          status: 400,
-        }
+        { error: 'Idioma de destino inválido.' },
+        { status: 400 }
       );
     }
 
-    // 3. Datas de validade do token temporário
     const now = Date.now();
 
-    const expireTime = new Date(
-      now + 30 * 60 * 1000
-    ).toISOString();
-
-    const newSessionExpireTime = new Date(
-      now + 60 * 1000
-    ).toISOString();
-
-    // 4. Criar token Gemini Live Translate
-    // A configuração de tradução fica bloqueada no token.
     const tokenRequest = {
       uses: 1,
 
-      expireTime,
+      expireTime: new Date(
+        now + 30 * 60 * 1000
+      ).toISOString(),
 
-      newSessionExpireTime,
+      newSessionExpireTime: new Date(
+        now + 60 * 1000
+      ).toISOString(),
 
-      liveConnectConstraints: {
+      bidiGenerateContentSetup: {
         model: `models/${MODEL}`,
 
-        config: {
+        generationConfig: {
           responseModalities: ['AUDIO'],
 
           inputAudioTranscription: {},
@@ -85,15 +69,17 @@ export async function POST(request) {
       },
     };
 
-    // 5. Pedir token efémero à Gemini API
     const response = await fetch(
       'https://generativelanguage.googleapis.com/v1beta/auth_tokens',
       {
         method: 'POST',
 
         headers: {
-          'x-goog-api-key': process.env.GEMINI_API_KEY,
-          'Content-Type': 'application/json',
+          'x-goog-api-key':
+            process.env.GEMINI_API_KEY,
+
+          'Content-Type':
+            'application/json',
         },
 
         body: JSON.stringify(tokenRequest),
@@ -102,21 +88,25 @@ export async function POST(request) {
       }
     );
 
-    // 6. Ler resposta da Gemini
     const payload = await response
       .json()
       .catch(() => ({}));
 
-    // 7. Mostrar erro real devolvido pela Gemini
     if (!response.ok) {
-      const message =
+      const detail =
         payload?.error?.message ||
-        'Não foi possível criar o token temporário Gemini.';
+        JSON.stringify(payload);
+
+      console.error(
+        'Erro Gemini auth_tokens:',
+        response.status,
+        payload
+      );
 
       return Response.json(
         {
-          error: `Gemini: ${message}`,
-          status: response.status,
+          error: `Gemini: ${detail}`,
+          geminiStatus: response.status,
         },
         {
           status: response.status,
@@ -124,11 +114,16 @@ export async function POST(request) {
       );
     }
 
-    // 8. Confirmar que recebemos o token
     if (!payload?.name) {
+      console.error(
+        'Gemini não devolveu token:',
+        payload
+      );
+
       return Response.json(
         {
-          error: 'A Gemini não devolveu o token temporário.',
+          error:
+            'A Gemini não devolveu o token temporário.',
         },
         {
           status: 502,
@@ -136,26 +131,24 @@ export async function POST(request) {
       );
     }
 
-    // 9. Enviar apenas o token temporário para o navegador
     return Response.json(
       {
         token: payload.name,
-
         model: MODEL,
-
         apiVersion: 'v1beta',
-
         targetLanguageCode,
+        setupLocked: true,
       },
       {
         headers: {
-          'Cache-Control': 'no-store, no-cache, must-revalidate',
+          'Cache-Control':
+            'no-store, no-cache, must-revalidate',
         },
       }
     );
   } catch (error) {
     console.error(
-      'Erro /api/session Gemini:',
+      'Erro /api/session:',
       error
     );
 
