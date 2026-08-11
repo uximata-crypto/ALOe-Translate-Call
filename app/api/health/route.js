@@ -1,45 +1,56 @@
-import { getVercelOidcToken } from '@vercel/oidc';
-
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  const hasStaticToken = Boolean(process.env.BLOB_READ_WRITE_TOKEN);
-  const hasStoreId = Boolean(process.env.BLOB_STORE_ID);
+const METERED_DOMAIN = 'aloe-translate-call.metered.live';
 
-  let oidcAvailable = false;
-  let oidcSource = 'unavailable';
-  if (hasStoreId && !hasStaticToken) {
-    try {
-      const token = await getVercelOidcToken();
-      oidcAvailable = Boolean(token);
-      if (oidcAvailable) oidcSource = 'vercel-function-header';
-    } catch {
-      oidcAvailable = false;
-    }
+function normalizeIceServers(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((server) => server && (typeof server.urls === 'string' || Array.isArray(server.urls)))
+    .map((server) => ({
+      urls: server.urls,
+      ...(server.username ? { username: server.username } : {}),
+      ...(server.credential ? { credential: server.credential } : {}),
+    }));
+}
+
+export async function POST() {
+  const apiKey = process.env.METERED_TURN_API_KEY;
+
+  if (!apiKey) {
+    return Response.json({
+      error: 'Metered TURN não configurado no Vercel.',
+      code: 'TURN_NOT_CONFIGURED',
+    }, { status: 503, headers: { 'Cache-Control': 'no-store' } });
   }
 
-  const blobAuthMode = hasStaticToken
-    ? 'read-write-token'
-    : (hasStoreId && oidcAvailable ? 'oidc' : 'missing');
+  try {
+    const query = new URLSearchParams({ apiKey, region: 'global' });
+    const response = await fetch(
+      `https://${METERED_DOMAIN}/api/v1/turn/credentials?${query.toString()}`,
+      { method: 'GET', cache: 'no-store' },
+    );
 
-  return Response.json({
-    ok: true,
-    app: 'ALOe Translate Call',
-    version: '1.1.2-gemini',
-    translationEngine: 'gemini-3.5-live-translate-preview',
-    geminiLiveApiVersion: 'v1beta',
-    geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
-    signaling: 'vercel-private-blob',
-    blobAuthMode,
-    blobStoreIdConfigured: hasStoreId,
-    vercelOidcAvailable: oidcAvailable,
-    vercelOidcSource: oidcSource,
-    blobStaticTokenConfigured: hasStaticToken,
-    productionReady: Boolean(process.env.GEMINI_API_KEY) && blobAuthMode !== 'missing',
-    upstashRequired: false,
-    openaiRequired: false,
-    publicProductionUrl: process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : 'https://al-oe-translate-call-woad.vercel.app',
-    languages: ['pt-PT', 'es', 'en', 'fr', 'de', 'ko', 'zh-Hans'],
-  }, { headers: { 'Cache-Control': 'no-store' } });
+    const data = await response.json().catch(() => null);
+    const iceServers = normalizeIceServers(data);
+
+    if (!response.ok || iceServers.length === 0) {
+      const message = data?.error || data?.message || `Metered TURN respondeu ${response.status}.`;
+      return Response.json({ error: message, code: 'TURN_CREDENTIALS_FAILED' }, {
+        status: 502,
+        headers: { 'Cache-Control': 'no-store' },
+      });
+    }
+
+    return Response.json({
+      iceServers,
+      provider: 'metered',
+      region: 'global',
+    }, { headers: { 'Cache-Control': 'no-store' } });
+  } catch (error) {
+    return Response.json({
+      error: error?.message || 'Falha ao obter credenciais TURN da Metered.',
+      code: 'TURN_CREDENTIALS_FAILED',
+    }, { status: 502, headers: { 'Cache-Control': 'no-store' } });
+  }
 }
