@@ -11,6 +11,15 @@ const LANGUAGES = [
   { code: 'zh', name: 'Mandarim / Chinês', native: '中文（普通话）', flag: '🇨🇳' },
 ];
 
+const FALLBACK_PUBLIC_APP_URL = 'https://al-oe-translate-call-woad.vercel.app';
+
+function getPublicAppUrl() {
+  const vercelProductionHost = process.env.NEXT_PUBLIC_VERCEL_PROJECT_PRODUCTION_URL;
+  const configured = process.env.NEXT_PUBLIC_APP_URL;
+  const value = configured || (vercelProductionHost ? `https://${vercelProductionHost}` : FALLBACK_PUBLIC_APP_URL);
+  return value.replace(/\/$/, '');
+}
+
 const RTC_CONFIG = {
   iceServers: [
     { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
@@ -214,7 +223,7 @@ export default function Home() {
       await waitForIceGathering(pc);
       await postSignal('offer', pc.localDescription.sdp, newRoom, newSecret);
 
-      const link = `${window.location.origin}/?join=${encodeURIComponent(newRoom)}&k=${encodeURIComponent(newSecret)}&lang=${encodeURIComponent(language)}`;
+      const link = `${getPublicAppUrl()}/?join=${encodeURIComponent(newRoom)}&k=${encodeURIComponent(newSecret)}&lang=${encodeURIComponent(language)}`;
       setInvite(link);
       setStatus('Convite criado — a aguardar o interlocutor');
 
@@ -475,7 +484,7 @@ export default function Home() {
       </section>
 
       <footer>
-        <span>ALOe Translate Call v1.0</span>
+        <span>ALOe Translate Call v1.0.3</span>
         <span>ES · EN · FR · DE · KO · ZH</span>
       </footer>
 
