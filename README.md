@@ -130,3 +130,20 @@ npm run dev
 ```
 
 Abra `http://localhost:3000`.
+
+## v1.0.2 — autenticação Blob reforçada
+
+Esta revisão prefere `BLOB_READ_WRITE_TOKEN` quando o Vercel o disponibiliza para o store. Se não existir, usa explicitamente `VERCEL_OIDC_TOKEN` + `BLOB_STORE_ID`. O endpoint `/api/health` mostra apenas indicadores booleanos/modo de autenticação (nunca os segredos) para facilitar diagnóstico.
+
+
+## Correção OIDC v1.0.2
+
+No runtime de Vercel Functions, o token OIDC é resolvido pelo pacote oficial `@vercel/oidc`, que lê o contexto/cabeçalho `x-vercel-oidc-token`. A aplicação deixou de depender de `process.env.VERCEL_OIDC_TOKEN` no runtime.
+
+Depois de atualizar o GitHub, aguarde o novo deployment e teste:
+
+```text
+/api/health
+```
+
+O esperado é `blobAuthMode: "oidc"`, `blobStoreIdConfigured: true`, `vercelOidcAvailable: true` e `productionReady: true`.

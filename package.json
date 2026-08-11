@@ -1,6 +1,6 @@
 {
   "name": "aloe-translate-call",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@vercel/blob": "^2.3.0",
+    "@vercel/oidc": "^2.0.0",
     "next": "^16.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
