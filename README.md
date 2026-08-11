@@ -1,155 +1,90 @@
-# ALOe Translate Call v1.0.3
+# ALOe Translate Call — Gemini v1.1.0
 
-## Correção do link público
+Web/PWA para chamadas internas entre **duas pessoas**. O Português (Portugal) é sempre a língua principal.
 
-Esta versão nunca envia ao interlocutor o URL protegido de um deployment (`*-projects.vercel.app`). Os convites usam sempre o domínio público de produção. No projeto atual, o fallback é `https://al-oe-translate-call-woad.vercel.app`. Se no futuro usar um domínio próprio, pode definir opcionalmente `NEXT_PUBLIC_APP_URL` com esse domínio.
-
-# ALOe Translate Call — Fresh v1.0
-
-Web/PWA para chamadas internas entre **duas pessoas**, com **Português (Portugal) sempre como língua principal** e tradução de voz em tempo real para:
+Idiomas do interlocutor:
 
 - Espanhol (`es`)
 - Inglês (`en`)
 - Francês (`fr`)
 - Alemão (`de`)
 - Coreano (`ko`)
-- Mandarim / Chinês (`zh`)
+- Mandarim / Chinês Simplificado (`zh-Hans`)
 
-## Arquitetura limpa
+## Motor de tradução
 
-Esta versão foi refeita de raiz.
+A versão 1.1.0 usa **Gemini 3.5 Live Translate Preview** (`gemini-3.5-live-translate-preview`) para tradução voz‑para‑voz em tempo real.
+
+A chave Gemini fica apenas no backend Vercel. O endpoint `/api/session` troca a `GEMINI_API_KEY` por um **token temporário de uma utilização**, válido apenas para iniciar uma sessão Live durante um curto período. O browser usa esse token para ligar diretamente à Gemini Live API por WebSocket.
+
+## Arquitetura
 
 - **GitHub** — código-fonte.
-- **Vercel** — alojamento, Functions e um **Vercel Blob privado** para a troca inicial do SDP WebRTC.
-- **OpenAI Realtime Translation** — `gpt-realtime-translate` para voz + legendas.
-- **WebRTC** — áudio da chamada diretamente entre os dois browsers.
-- **Upstash / Redis** — **não é usado**.
+- **Vercel** — aplicação Next.js + endpoints serverless.
+- **Vercel Blob privado** — apenas sinalização `offer/answer` para estabelecer a chamada WebRTC.
+- **WebRTC** — chamada de voz direta entre os dois browsers.
+- **Gemini Live Translate** — tradução da pista de áudio recebida por cada participante.
+- **Upstash / Redis** — não utilizado.
+- **OpenAI API** — não utilizada nesta versão.
 
-O Blob do Vercel guarda apenas os dois pequenos documentos de sinalização `offer` e `answer`. O áudio da chamada não é armazenado no Blob. Depois de o anfitrião receber a resposta, a app tenta apagar esses ficheiros.
+## Variável obrigatória no Vercel
 
-## Única variável que tem de escrever no Vercel
-
-```text
-OPENAI_API_KEY
-```
-
-Nunca coloque a chave OpenAI dentro do código ou do GitHub.
-
-## Publicar — passo a passo
-
-### 1. GitHub
-
-Crie um repositório vazio, por exemplo:
+Crie apenas:
 
 ```text
-aloe-translate-call
+GEMINI_API_KEY
 ```
 
-Carregue **todos os ficheiros desta pasta** para a raiz do repositório.
+No Vercel: `Settings` → `Environment Variables` → `Add Environment Variable`.
 
-### 2. Vercel
+Marque **Sensitive** e aplique a **Production and Preview**.
 
-- `Add New` → `Project`
-- Importe `aloe-translate-call` do GitHub.
-- Framework: o Vercel deve reconhecer **Next.js** automaticamente.
-- Faça o primeiro Deploy.
+A antiga `OPENAI_API_KEY` pode ser removida depois de confirmar que esta versão está em produção.
 
-### 3. OPENAI_API_KEY
+## Vercel Blob
 
-No projeto Vercel:
+O Blob privado que já está ligado ao projeto continua a ser utilizado. Não precisa de criar outro.
 
-`Settings` → `Environment Variables` → `Add Environment Variable`
-
-Key:
-
-```text
-OPENAI_API_KEY
-```
-
-Value: a sua chave OpenAI.
-
-Marque como **Sensitive** e grave.
-
-### 4. Criar Blob PRIVADO dentro do próprio Vercel
-
-Não precisa de criar conta Upstash, Redis ou outro fornecedor.
-
-No mesmo projeto Vercel:
-
-`Storage` → `Create Database` → `Blob` → `Continue` → **Private** → ligar ao projeto.
-
-No Vercel, o SDK `@vercel/blob` pode autenticar com **OIDC automaticamente** quando o store está ligado ao projeto. Assim não tem de copiar manualmente `BLOB_READ_WRITE_TOKEN` para esta utilização no Vercel.
-
-Depois faça **Redeploy**.
-
-### 5. Verificação
-
-Abra:
-
-```text
-https://SEU-PROJETO.vercel.app/api/health
-```
-
-Deverá aparecer algo semelhante a:
+O endpoint `/api/health` deverá mostrar:
 
 ```json
 {
   "ok": true,
-  "openaiConfigured": true,
-  "signaling": "vercel-private-blob",
-  "upstashRequired": false
+  "version": "1.1.0-gemini",
+  "translationEngine": "gemini-3.5-live-translate-preview",
+  "geminiConfigured": true,
+  "productionReady": true,
+  "openaiRequired": false
 }
 ```
 
-### 6. Primeiro teste
+## Atualizar um projeto v1.0.3 existente
 
-1. Abra a app no primeiro telemóvel.
-2. Escolha Espanhol, Inglês, Francês, Alemão, Coreano ou Mandarim.
-3. Prima **Nova chamada** e autorize o microfone.
-4. Quando aparecer o link, copie-o e envie ao segundo telemóvel.
-5. No segundo telemóvel, abra o link e prima **Entrar**.
-6. Autorize o microfone.
-7. Fale português no primeiro lado; o segundo lado deve ouvir a tradução.
-8. O segundo fala a língua dele; o primeiro deve ouvir português.
-
-## Limitação atual importante
-
-Esta versão usa STUN público e WebRTC direto, sem fornecedor TURN externo. Isso mantém o projeto apenas em GitHub + Vercel + OpenAI, mas algumas redes empresariais, hotéis, CGNAT ou firewalls muito restritivos podem impedir a ligação direta. Se isso acontecer, a fase seguinte é acrescentar TURN.
-
-## Segurança
-
-- A chave `OPENAI_API_KEY` existe apenas no servidor Vercel.
-- O browser recebe apenas um **client secret temporário** para a sessão Realtime Translation.
-- O link de convite inclui um segredo aleatório de alta entropia.
-- O Blob é privado.
-- Não guarde nem publique `.env.local`.
-
-## Desenvolvimento local (opcional)
-
-Para testar localmente, além de `OPENAI_API_KEY`, o acesso ao Vercel Blob necessita de credenciais locais. O caminho mais simples é usar a CLI Vercel e puxar as variáveis do projeto.
-
-```bash
-npm install
-vercel link
-vercel env pull .env.local
-npm run dev
-```
-
-Abra `http://localhost:3000`.
-
-## v1.0.2 — autenticação Blob reforçada
-
-Esta revisão prefere `BLOB_READ_WRITE_TOKEN` quando o Vercel o disponibiliza para o store. Se não existir, usa explicitamente `VERCEL_OIDC_TOKEN` + `BLOB_STORE_ID`. O endpoint `/api/health` mostra apenas indicadores booleanos/modo de autenticação (nunca os segredos) para facilitar diagnóstico.
-
-
-## Correção OIDC v1.0.2
-
-No runtime de Vercel Functions, o token OIDC é resolvido pelo pacote oficial `@vercel/oidc`, que lê o contexto/cabeçalho `x-vercel-oidc-token`. A aplicação deixou de depender de `process.env.VERCEL_OIDC_TOKEN` no runtime.
-
-Depois de atualizar o GitHub, aguarde o novo deployment e teste:
+Pode substituir todo o projeto, mas para esta migração os ficheiros essenciais são:
 
 ```text
-/api/health
+app/page.js
+app/api/session/route.js
+app/api/health/route.js
+.env.example
+package.json
+README.md
 ```
 
-O esperado é `blobAuthMode: "oidc"`, `blobStoreIdConfigured: true`, `vercelOidcAvailable: true` e `productionReady: true`.
+Depois do commit no GitHub, aguarde o novo deployment automático do Vercel.
+
+## Primeiro teste
+
+1. Abra o domínio público de produção, por exemplo `https://al-oe-translate-call-woad.vercel.app`.
+2. Crie uma chamada e escolha a língua do interlocutor.
+3. Envie o link ao segundo telemóvel.
+4. Autorize o microfone nos dois.
+5. Fale Português num lado e a língua escolhida no outro.
+6. A app envia apenas a pista de áudio **recebida** por cada participante para o Gemini Live Translate, com o idioma de destino apropriado.
+
+## Notas técnicas
+
+- Entrada Gemini Live: PCM linear 16-bit, mono, 16 kHz.
+- Saída de áudio: PCM 24 kHz, reproduzida no browser através de Web Audio.
+- A tradução usa tokens temporários para não expor a `GEMINI_API_KEY` no frontend.
+- O modelo Live Translate é Preview; limites e disponibilidade podem mudar.
