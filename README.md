@@ -1,3 +1,9 @@
+# ALOe Translate Call v1.0.3
+
+## Correção do link público
+
+Esta versão nunca envia ao interlocutor o URL protegido de um deployment (`*-projects.vercel.app`). Os convites usam sempre o domínio público de produção. No projeto atual, o fallback é `https://al-oe-translate-call-woad.vercel.app`. Se no futuro usar um domínio próprio, pode definir opcionalmente `NEXT_PUBLIC_APP_URL` com esse domínio.
+
 # ALOe Translate Call — Fresh v1.0
 
 Web/PWA para chamadas internas entre **duas pessoas**, com **Português (Portugal) sempre como língua principal** e tradução de voz em tempo real para:
