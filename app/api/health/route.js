@@ -26,8 +26,9 @@ export async function GET() {
   return Response.json({
     ok: true,
     app: 'ALOe Translate Call',
-    version: '1.1.0-gemini',
+    version: '1.1.1-gemini',
     translationEngine: 'gemini-3.5-live-translate-preview',
+    geminiLiveApiVersion: 'v1alpha',
     geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
     signaling: 'vercel-private-blob',
     blobAuthMode,
