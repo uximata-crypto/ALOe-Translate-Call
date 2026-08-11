@@ -64,6 +64,55 @@ function trimTranscript(text) {
   return `…${text.slice(-1399)}`;
 }
 
+function downsampleTo16k(input, inputRate) {
+  if (inputRate === 16000) return new Float32Array(input);
+  const ratio = inputRate / 16000;
+  const length = Math.max(1, Math.floor(input.length / ratio));
+  const output = new Float32Array(length);
+  for (let i = 0; i < length; i += 1) {
+    const position = i * ratio;
+    const left = Math.floor(position);
+    const right = Math.min(left + 1, input.length - 1);
+    const frac = position - left;
+    output[i] = input[left] * (1 - frac) + input[right] * frac;
+  }
+  return output;
+}
+
+function pcm16Base64(samples) {
+  const bytes = new Uint8Array(samples.length * 2);
+  const view = new DataView(bytes.buffer);
+  for (let i = 0; i < samples.length; i += 1) {
+    const sample = Math.max(-1, Math.min(1, samples[i]));
+    const value = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+    view.setInt16(i * 2, value, true);
+  }
+  let binary = '';
+  const step = 0x8000;
+  for (let i = 0; i < bytes.length; i += step) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + step));
+  }
+  return btoa(binary);
+}
+
+function base64ToPcmFloat32(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  const view = new DataView(bytes.buffer);
+  const samples = new Float32Array(Math.floor(bytes.length / 2));
+  for (let i = 0; i < samples.length; i += 1) {
+    const value = view.getInt16(i * 2, true);
+    samples[i] = value < 0 ? value / 0x8000 : value / 0x7fff;
+  }
+  return samples;
+}
+
+function appendTranscript(setter, text) {
+  if (!text) return;
+  setter((old) => trimTranscript(`${old}${old && !old.endsWith(' ') ? ' ' : ''}${text}`));
+}
+
 export default function Home() {
   const [language, setLanguage] = useState('es');
   const [role, setRole] = useState('host');
@@ -83,8 +132,15 @@ export default function Home() {
 
   const localStreamRef = useRef(null);
   const callPcRef = useRef(null);
-  const translationPcRef = useRef(null);
-  const translationDcRef = useRef(null);
+  const geminiWsRef = useRef(null);
+  const geminiReadyRef = useRef(false);
+  const geminiInputContextRef = useRef(null);
+  const geminiOutputContextRef = useRef(null);
+  const geminiSourceRef = useRef(null);
+  const geminiProcessorRef = useRef(null);
+  const geminiSilentGainRef = useRef(null);
+  const geminiRemoteTrackRef = useRef(null);
+  const geminiNextPlayTimeRef = useRef(0);
   const originalAudioRef = useRef(null);
   const translatedAudioRef = useRef(null);
   const pollAbortRef = useRef(false);
@@ -156,6 +212,7 @@ export default function Home() {
         originalAudioRef.current.play().catch(() => {});
       }
       startTranslation(event.track).catch((e) => {
+        stopGeminiTranslation();
         setError(`A chamada ligou, mas a tradução não iniciou: ${e.message}`);
       });
     };
@@ -262,10 +319,44 @@ export default function Home() {
     }
   }
 
+  function playGeminiPcm(base64Audio) {
+    const ctx = geminiOutputContextRef.current;
+    if (!ctx || !base64Audio) return;
+    const samples = base64ToPcmFloat32(base64Audio);
+    if (!samples.length) return;
+    const buffer = ctx.createBuffer(1, samples.length, 24000);
+    buffer.copyToChannel(samples, 0);
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(ctx.destination);
+    const startAt = Math.max(ctx.currentTime + 0.03, geminiNextPlayTimeRef.current || 0);
+    source.start(startAt);
+    geminiNextPlayTimeRef.current = startAt + buffer.duration;
+  }
+
+  function stopGeminiTranslation() {
+    geminiReadyRef.current = false;
+    try { geminiProcessorRef.current?.disconnect(); } catch {}
+    try { geminiSourceRef.current?.disconnect(); } catch {}
+    try { geminiSilentGainRef.current?.disconnect(); } catch {}
+    geminiProcessorRef.current = null;
+    geminiSourceRef.current = null;
+    geminiSilentGainRef.current = null;
+    try { geminiRemoteTrackRef.current?.stop(); } catch {}
+    geminiRemoteTrackRef.current = null;
+    try { geminiWsRef.current?.close(1000, 'hangup'); } catch {}
+    geminiWsRef.current = null;
+    try { geminiInputContextRef.current?.close(); } catch {}
+    try { geminiOutputContextRef.current?.close(); } catch {}
+    geminiInputContextRef.current = null;
+    geminiOutputContextRef.current = null;
+    geminiNextPlayTimeRef.current = 0;
+  }
+
   async function startTranslation(remoteTrack) {
-    if (translationPcRef.current) return;
+    if (geminiWsRef.current) return;
     const targetLanguage = isGuest ? language : 'pt';
-    setStatus('Chamada ligada — a iniciar tradução…');
+    setStatus('Chamada ligada — a iniciar Gemini Live Translate…');
 
     const sessionResponse = await fetch('/api/session', {
       method: 'POST',
@@ -273,55 +364,106 @@ export default function Home() {
       body: JSON.stringify({ targetLanguage, room, role }),
     });
     const session = await sessionResponse.json();
-    if (!sessionResponse.ok) throw new Error(session.error || 'Falha ao obter sessão OpenAI.');
-    const clientSecret = session.value;
-    if (!clientSecret) throw new Error('A OpenAI não devolveu o client secret.');
+    if (!sessionResponse.ok) throw new Error(session.error || 'Falha ao obter sessão Gemini.');
+    if (!session.token) throw new Error('A Gemini não devolveu o token temporário.');
 
-    const pc = new RTCPeerConnection();
-    translationPcRef.current = pc;
-    pc.ontrack = (event) => {
-      const stream = event.streams[0] || new MediaStream([event.track]);
-      if (translatedAudioRef.current) {
-        translatedAudioRef.current.srcObject = stream;
-        translatedAudioRef.current.muted = false;
-        translatedAudioRef.current.play().catch(() => {});
-      }
-    };
+    const inputContext = new (window.AudioContext || window.webkitAudioContext)();
+    const outputContext = new (window.AudioContext || window.webkitAudioContext)();
+    geminiInputContextRef.current = inputContext;
+    geminiOutputContextRef.current = outputContext;
+    await Promise.all([inputContext.resume(), outputContext.resume()]);
 
-    const dc = pc.createDataChannel('oai-events');
-    translationDcRef.current = dc;
-    dc.onmessage = ({ data }) => {
+    const clonedTrack = remoteTrack.clone();
+    geminiRemoteTrackRef.current = clonedTrack;
+    const remoteStream = new MediaStream([clonedTrack]);
+    const source = inputContext.createMediaStreamSource(remoteStream);
+    const processor = inputContext.createScriptProcessor(4096, 1, 1);
+    const silentGain = inputContext.createGain();
+    silentGain.gain.value = 0;
+    source.connect(processor);
+    processor.connect(silentGain);
+    silentGain.connect(inputContext.destination);
+    geminiSourceRef.current = source;
+    geminiProcessorRef.current = processor;
+    geminiSilentGainRef.current = silentGain;
+
+    const endpoint = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token=${encodeURIComponent(session.token)}`;
+    const ws = new WebSocket(endpoint);
+    geminiWsRef.current = ws;
+
+    processor.onaudioprocess = (event) => {
+      if (!geminiReadyRef.current || ws.readyState !== WebSocket.OPEN) return;
+      const input = event.inputBuffer.getChannelData(0);
+      const pcm = downsampleTo16k(input, inputContext.sampleRate);
       try {
-        const event = JSON.parse(data);
-        if (event.type === 'session.input_transcript.delta' && event.delta) {
-          setSourceText((old) => trimTranscript(old + event.delta));
-        }
-        if (event.type === 'session.output_transcript.delta' && event.delta) {
-          setTranslatedText((old) => trimTranscript(old + event.delta));
-        }
+        ws.send(JSON.stringify({
+          realtimeInput: {
+            audio: {
+              data: pcm16Base64(pcm),
+              mimeType: 'audio/pcm;rate=16000',
+            },
+          },
+        }));
       } catch {}
     };
 
-    const clonedTrack = remoteTrack.clone();
-    const clonedStream = new MediaStream([clonedTrack]);
-    pc.addTrack(clonedTrack, clonedStream);
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Tempo esgotado ao ligar ao Gemini Live.')), 15000);
 
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    const sdpResponse = await fetch('https://api.openai.com/v1/realtime/translations/calls', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${clientSecret}`,
-        'Content-Type': 'application/sdp',
-      },
-      body: offer.sdp,
+      ws.onopen = () => {
+        ws.send(JSON.stringify({
+          setup: {
+            model: `models/${session.model}`,
+            generationConfig: {
+              responseModalities: ['AUDIO'],
+              inputAudioTranscription: {},
+              outputAudioTranscription: {},
+              translationConfig: {
+                targetLanguageCode: session.targetLanguageCode,
+                echoTargetLanguage: true,
+              },
+            },
+          },
+        }));
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          if (message.setupComplete) {
+            geminiReadyRef.current = true;
+            clearTimeout(timeout);
+            setStatus('Chamada ligada — tradução Gemini em tempo real');
+            resolve();
+          }
+          if (message.error) {
+            const detail = message.error.message || JSON.stringify(message.error);
+            setError(`Gemini Live: ${detail}`);
+          }
+          const content = message.serverContent;
+          if (!content) return;
+          if (content.inputTranscription?.text) appendTranscript(setSourceText, content.inputTranscription.text);
+          if (content.outputTranscription?.text) appendTranscript(setTranslatedText, content.outputTranscription.text);
+          if (content.modelTurn?.parts) {
+            for (const part of content.modelTurn.parts) {
+              if (part.inlineData?.data) playGeminiPcm(part.inlineData.data);
+            }
+          }
+        } catch {}
+      };
+
+      ws.onerror = () => {
+        clearTimeout(timeout);
+        reject(new Error('Não foi possível ligar à Gemini Live API.'));
+      };
+
+      ws.onclose = (event) => {
+        geminiReadyRef.current = false;
+        if (event.code !== 1000 && connected) {
+          setStatus('Tradução Gemini desligada');
+        }
+      };
     });
-    if (!sdpResponse.ok) {
-      const text = await sdpResponse.text();
-      throw new Error(`OpenAI Realtime: ${text.slice(0, 200) || sdpResponse.status}`);
-    }
-    await pc.setRemoteDescription({ type: 'answer', sdp: await sdpResponse.text() });
-    setStatus('Chamada ligada — tradução em tempo real');
   }
 
   function toggleMute() {
@@ -351,14 +493,7 @@ export default function Home() {
 
   function hangup() {
     pollAbortRef.current = true;
-    try {
-      if (translationDcRef.current?.readyState === 'open') {
-        translationDcRef.current.send(JSON.stringify({ type: 'session.close' }));
-      }
-    } catch {}
-    translationDcRef.current = null;
-    translationPcRef.current?.close();
-    translationPcRef.current = null;
+    stopGeminiTranslation();
     callPcRef.current?.close();
     callPcRef.current = null;
     localStreamRef.current?.getTracks().forEach((track) => track.stop());
@@ -389,7 +524,7 @@ export default function Home() {
       <section className="hero card">
         <div className="ptPill">🇵🇹 PORTUGUÊS (PORTUGAL)</div>
         <h1>Fale em português.<br /><span>O outro lado ouve na língua dele.</span></h1>
-        <p>Chamada interna WebRTC com tradução de voz e legendas em tempo real.</p>
+        <p>Chamada interna WebRTC com Gemini Live Translate, voz e legendas em tempo real.</p>
       </section>
 
       {!connected && (
@@ -480,11 +615,11 @@ export default function Home() {
       <section className="infoGrid">
         <div className="miniCard"><b>🇵🇹 Principal</b><span>Português fixo</span></div>
         <div className="miniCard"><b>🔒 Privado</b><span>Link com segredo aleatório</span></div>
-        <div className="miniCard"><b>⚡ Direto</b><span>Áudio WebRTC entre os dois</span></div>
+        <div className="miniCard"><b>✨ Gemini Live</b><span>Tradução voz‑para‑voz</span></div>
       </section>
 
       <footer>
-        <span>ALOe Translate Call v1.0.3</span>
+        <span>ALOe Translate Call v1.1.0 · Gemini</span>
         <span>ES · EN · FR · DE · KO · ZH</span>
       </footer>
 
