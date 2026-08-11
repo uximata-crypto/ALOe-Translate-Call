@@ -18,6 +18,22 @@ function pathname(room, secret, kind) {
   return `aloe-signals/${roomHash(room, secret)}/${kind}.json`;
 }
 
+// Prefer the static read-write token when Vercel exposes it for this store.
+// This bypasses any stale/mismatched OIDC credential on an older deployment.
+// If no static token is available, use the Vercel OIDC pair explicitly.
+function blobAuth() {
+  if (process.env.BLOB_READ_WRITE_TOKEN) {
+    return { token: process.env.BLOB_READ_WRITE_TOKEN };
+  }
+  if (process.env.VERCEL_OIDC_TOKEN && process.env.BLOB_STORE_ID) {
+    return {
+      oidcToken: process.env.VERCEL_OIDC_TOKEN,
+      storeId: process.env.BLOB_STORE_ID,
+    };
+  }
+  throw new Error('Credenciais do Vercel Blob não estão disponíveis neste deployment. Ligue o Blob ao projeto e faça um novo deployment.');
+}
+
 export async function POST(request) {
   try {
     const body = await request.json();
@@ -39,14 +55,15 @@ export async function POST(request) {
         allowOverwrite: true,
         contentType: 'application/json',
         cacheControlMaxAge: 60,
+        ...blobAuth(),
       },
     );
 
     return Response.json({ ok: true }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     return Response.json(
-      { error: error?.message || 'Não foi possível guardar a sinalização. Verifique se criou e ligou um Blob privado no Vercel.' },
-      { status: 500 },
+      { error: error?.message || 'Não foi possível guardar a sinalização.' },
+      { status: 500, headers: { 'Cache-Control': 'no-store' } },
     );
   }
 }
@@ -62,6 +79,7 @@ export async function GET(request) {
     const result = await get(pathname(room, secret, kind), {
       access: 'private',
       useCache: false,
+      ...blobAuth(),
     });
 
     if (!result || result.statusCode !== 200) {
@@ -76,7 +94,7 @@ export async function GET(request) {
     if (/not found|404/i.test(message)) {
       return Response.json({ found: false }, { status: 404, headers: { 'Cache-Control': 'no-store' } });
     }
-    return Response.json({ error: message || 'Erro ao ler sinalização.' }, { status: 500 });
+    return Response.json({ error: message || 'Erro ao ler sinalização.' }, { status: 500, headers: { 'Cache-Control': 'no-store' } });
   }
 }
 
@@ -86,12 +104,12 @@ export async function DELETE(request) {
     const room = url.searchParams.get('room') || '';
     const secret = url.searchParams.get('secret') || '';
     validate(room, secret, 'offer');
-    await del([
-      pathname(room, secret, 'offer'),
-      pathname(room, secret, 'answer'),
-    ]).catch(() => {});
-    return Response.json({ ok: true });
+    await del(
+      [pathname(room, secret, 'offer'), pathname(room, secret, 'answer')],
+      blobAuth(),
+    ).catch(() => {});
+    return Response.json({ ok: true }, { headers: { 'Cache-Control': 'no-store' } });
   } catch {
-    return Response.json({ ok: true });
+    return Response.json({ ok: true }, { headers: { 'Cache-Control': 'no-store' } });
   }
 }
