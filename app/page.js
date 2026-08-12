@@ -2303,12 +2303,6 @@ export default function Home() {
             'AUDIO',
           ],
 
-          inputAudioTranscription:
-            {},
-
-          outputAudioTranscription:
-            {},
-
           translationConfig: {
             targetLanguageCode:
               session.targetLanguageCode,
@@ -2317,6 +2311,12 @@ export default function Home() {
               true,
           },
         },
+
+        inputAudioTranscription:
+          {},
+
+        outputAudioTranscription:
+          {},
 
         sessionResumption:
           resumeHandle
