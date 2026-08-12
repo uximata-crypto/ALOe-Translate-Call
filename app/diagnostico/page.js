@@ -210,13 +210,13 @@ async function testGeminiWebSocket(session, timeoutMs = 12000) {
           model: `models/${session.model}`,
           generationConfig: {
             responseModalities: ['AUDIO'],
-            inputAudioTranscription: {},
-            outputAudioTranscription: {},
             translationConfig: {
               targetLanguageCode: session.targetLanguageCode,
               echoTargetLanguage: true,
             },
           },
+          inputAudioTranscription: {},
+          outputAudioTranscription: {},
           sessionResumption: {},
           contextWindowCompression: {
             slidingWindow: {},
