@@ -8,42 +8,12 @@ import {
 } from 'react';
 
 const LANGUAGES = [
-  {
-    code: 'es',
-    name: 'Espanhol',
-    native: 'Español',
-    flag: '🇪🇸',
-  },
-  {
-    code: 'en',
-    name: 'Inglês',
-    native: 'English',
-    flag: '🇬🇧',
-  },
-  {
-    code: 'fr',
-    name: 'Francês',
-    native: 'Français',
-    flag: '🇫🇷',
-  },
-  {
-    code: 'de',
-    name: 'Alemão',
-    native: 'Deutsch',
-    flag: '🇩🇪',
-  },
-  {
-    code: 'ko',
-    name: 'Coreano',
-    native: '한국어',
-    flag: '🇰🇷',
-  },
-  {
-    code: 'zh',
-    name: 'Mandarim / Chinês',
-    native: '中文（普通话）',
-    flag: '🇨🇳',
-  },
+  { code: 'es', name: 'Espanhol', native: 'Español', flag: '🇪🇸' },
+  { code: 'en', name: 'Inglês', native: 'English', flag: '🇬🇧' },
+  { code: 'fr', name: 'Francês', native: 'Français', flag: '🇫🇷' },
+  { code: 'de', name: 'Alemão', native: 'Deutsch', flag: '🇩🇪' },
+  { code: 'ko', name: 'Coreano', native: '한국어', flag: '🇰🇷' },
+  { code: 'zh', name: 'Mandarim / Chinês', native: '中文（普通话）', flag: '🇨🇳' },
 ];
 
 const FALLBACK_PUBLIC_APP_URL =
@@ -413,6 +383,563 @@ async function parseWebSocketMessage(
   );
 }
 
+/* -------------------- Diagnóstico de chamada -------------------- */
+
+function createLiveDiagnostics() {
+  return {
+    webRtcState: 'new',
+    iceState: 'new',
+    signalingState: 'stable',
+    connectionPath: 'A determinar…',
+    candidateProtocol: '—',
+    localCandidateType: '—',
+    remoteCandidateType: '—',
+    rttMs: null,
+    jitterMs: null,
+    packetLossPct: null,
+    inboundKbps: null,
+    outboundKbps: null,
+    inboundAudioLevelPct: null,
+    geminiWsState: 'fechado',
+    geminiSetupComplete: false,
+    geminiApiVersion: '—',
+    geminiModel: '—',
+    geminiTarget: '—',
+    geminiStartupMs: null,
+    translationLatencyMs: null,
+    reconnects: 0,
+    lastError: '',
+    lastErrorAt: '',
+    updatedAt: '',
+  };
+}
+
+function numericOrNull(value) {
+  return Number.isFinite(value)
+    ? value
+    : null;
+}
+
+function rounded(value, digits = 0) {
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+
+  const factor =
+    10 ** digits;
+
+  return Math.round(
+    value * factor
+  ) / factor;
+}
+
+function findSelectedCandidatePair(
+  report
+) {
+  let transport = null;
+  let selectedPair = null;
+  let fallbackPair = null;
+
+  report.forEach((stat) => {
+    if (
+      stat.type === 'transport'
+    ) {
+      transport = stat;
+    }
+
+    if (
+      stat.type ===
+        'candidate-pair' &&
+      stat.state === 'succeeded'
+    ) {
+      if (
+        stat.selected === true
+      ) {
+        selectedPair = stat;
+      }
+
+      if (
+        stat.nominated === true
+      ) {
+        fallbackPair = stat;
+      }
+    }
+  });
+
+  if (
+    !selectedPair &&
+    transport?.selectedCandidatePairId
+  ) {
+    selectedPair =
+      report.get(
+        transport.selectedCandidatePairId
+      ) || null;
+  }
+
+  return (
+    selectedPair ||
+    fallbackPair ||
+    null
+  );
+}
+
+function findAudioStats(report) {
+  let inbound = null;
+  let outbound = null;
+
+  report.forEach((stat) => {
+    const isAudio =
+      stat.kind === 'audio' ||
+      stat.mediaType === 'audio';
+
+    if (
+      stat.type ===
+        'inbound-rtp' &&
+      isAudio &&
+      !stat.isRemote
+    ) {
+      inbound = stat;
+    }
+
+    if (
+      stat.type ===
+        'outbound-rtp' &&
+      isAudio &&
+      !stat.isRemote
+    ) {
+      outbound = stat;
+    }
+  });
+
+  return {
+    inbound,
+    outbound,
+  };
+}
+
+function candidatePath(
+  localCandidate,
+  remoteCandidate
+) {
+  const localType =
+    localCandidate?.candidateType ||
+    'desconhecido';
+
+  const remoteType =
+    remoteCandidate?.candidateType ||
+    'desconhecido';
+
+  if (
+    localType === 'relay' ||
+    remoteType === 'relay'
+  ) {
+    return 'TURN / relay';
+  }
+
+  if (
+    localType === 'srflx' ||
+    remoteType === 'srflx'
+  ) {
+    return 'Direta / STUN';
+  }
+
+  if (
+    localType === 'host' &&
+    remoteType === 'host'
+  ) {
+    return 'Direta / rede local';
+  }
+
+  return 'Direta / ICE';
+}
+
+function metricText(
+  value,
+  suffix = '',
+  decimals = 0
+) {
+  if (
+    value === null ||
+    value === undefined ||
+    Number.isNaN(value)
+  ) {
+    return '—';
+  }
+
+  return `${Number(value).toFixed(decimals)}${suffix}`;
+}
+
+function wsStateLabel(ws) {
+  if (!ws) return 'fechado';
+
+  if (
+    ws.readyState ===
+    WebSocket.CONNECTING
+  ) {
+    return 'a ligar';
+  }
+
+  if (
+    ws.readyState ===
+    WebSocket.OPEN
+  ) {
+    return 'aberto';
+  }
+
+  if (
+    ws.readyState ===
+    WebSocket.CLOSING
+  ) {
+    return 'a fechar';
+  }
+
+  return 'fechado';
+}
+
+function DiagnosticsMetric({
+  label,
+  value,
+  accent = false,
+}) {
+  return (
+    <div
+      style={{
+        padding: '12px 13px',
+        borderRadius: 13,
+        background:
+          'rgba(5, 20, 29, 0.52)',
+        border:
+          '1px solid rgba(124, 217, 255, 0.13)',
+      }}
+    >
+      <div
+        style={{
+          fontSize: 11,
+          letterSpacing: '.06em',
+          textTransform: 'uppercase',
+          color: '#8fa8b7',
+          marginBottom: 4,
+          fontWeight: 800,
+        }}
+      >
+        {label}
+      </div>
+
+      <div
+        style={{
+          color: accent
+            ? '#57e5aa'
+            : '#eef7fb',
+          fontSize: 15,
+          fontWeight: 800,
+          overflowWrap: 'anywhere',
+        }}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function LiveDiagnosticsPanel({
+  diagnostics,
+  onCopy,
+  copied,
+}) {
+  const geminiOk =
+    diagnostics.geminiWsState ===
+      'aberto' &&
+    diagnostics.geminiSetupComplete;
+
+  return (
+    <div
+      style={{
+        marginTop: 18,
+        padding: 16,
+        borderRadius: 18,
+        background:
+          'linear-gradient(145deg, rgba(5, 23, 32, .96), rgba(12, 42, 53, .92))',
+        border:
+          '1px solid rgba(87, 229, 170, .24)',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent:
+            'space-between',
+          gap: 12,
+          flexWrap: 'wrap',
+          marginBottom: 14,
+        }}
+      >
+        <div>
+          <strong
+            style={{
+              color: '#f4fbff',
+              fontSize: 16,
+            }}
+          >
+            📊 Diagnóstico da chamada
+          </strong>
+
+          <div
+            style={{
+              marginTop: 4,
+              color: '#91a9b7',
+              fontSize: 12,
+            }}
+          >
+            Atualização automática a cada 2 segundos
+          </div>
+        </div>
+
+        <div
+          style={{
+            display: 'flex',
+            gap: 8,
+            flexWrap: 'wrap',
+          }}
+        >
+          <a
+            href="/diagnostico"
+            target="_blank"
+            rel="noreferrer"
+            style={{
+              color: '#7dd9ff',
+              textDecoration: 'none',
+              border:
+                '1px solid rgba(125, 217, 255, .28)',
+              borderRadius: 11,
+              padding: '8px 10px',
+              fontSize: 12,
+              fontWeight: 800,
+            }}
+          >
+            Teste completo
+          </a>
+
+          <button
+            type="button"
+            onClick={onCopy}
+            style={{
+              color: '#f4fbff',
+              background:
+                'rgba(255,255,255,.04)',
+              border:
+                '1px solid rgba(255,255,255,.13)',
+              borderRadius: 11,
+              padding: '8px 10px',
+              fontSize: 12,
+              fontWeight: 800,
+              cursor: 'pointer',
+            }}
+          >
+            {copied
+              ? '✓ Copiado'
+              : 'Copiar diagnóstico'}
+          </button>
+        </div>
+      </div>
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns:
+            'repeat(auto-fit, minmax(135px, 1fr))',
+          gap: 9,
+        }}
+      >
+        <DiagnosticsMetric
+          label="WebRTC"
+          value={
+            diagnostics.webRtcState
+          }
+          accent={
+            diagnostics.webRtcState ===
+            'connected'
+          }
+        />
+
+        <DiagnosticsMetric
+          label="Ligação"
+          value={
+            diagnostics.connectionPath
+          }
+          accent={
+            diagnostics.connectionPath.includes(
+              'TURN'
+            )
+          }
+        />
+
+        <DiagnosticsMetric
+          label="RTT"
+          value={metricText(
+            diagnostics.rttMs,
+            ' ms',
+            0
+          )}
+        />
+
+        <DiagnosticsMetric
+          label="Jitter"
+          value={metricText(
+            diagnostics.jitterMs,
+            ' ms',
+            1
+          )}
+        />
+
+        <DiagnosticsMetric
+          label="Perda"
+          value={metricText(
+            diagnostics.packetLossPct,
+            '%',
+            2
+          )}
+        />
+
+        <DiagnosticsMetric
+          label="Entrada"
+          value={metricText(
+            diagnostics.inboundKbps,
+            ' kbps',
+            1
+          )}
+        />
+
+        <DiagnosticsMetric
+          label="Saída"
+          value={metricText(
+            diagnostics.outboundKbps,
+            ' kbps',
+            1
+          )}
+        />
+
+        <DiagnosticsMetric
+          label="Áudio recebido"
+          value={metricText(
+            diagnostics.inboundAudioLevelPct,
+            '%',
+            0
+          )}
+        />
+
+        <DiagnosticsMetric
+          label="ICE"
+          value={
+            diagnostics.iceState
+          }
+        />
+
+        <DiagnosticsMetric
+          label="Protocolo"
+          value={
+            diagnostics.candidateProtocol
+          }
+        />
+
+        <DiagnosticsMetric
+          label="Gemini WS"
+          value={
+            geminiOk
+              ? 'aberto + setup OK'
+              : diagnostics.geminiWsState
+          }
+          accent={geminiOk}
+        />
+
+        <DiagnosticsMetric
+          label="Arranque Gemini"
+          value={metricText(
+            diagnostics.geminiStartupMs,
+            ' ms',
+            0
+          )}
+        />
+
+        <DiagnosticsMetric
+          label="Tradução aprox."
+          value={metricText(
+            diagnostics.translationLatencyMs,
+            ' ms',
+            0
+          )}
+        />
+
+        <DiagnosticsMetric
+          label="Reconexões"
+          value={
+            diagnostics.reconnects
+          }
+        />
+
+        <DiagnosticsMetric
+          label="API Gemini"
+          value={
+            diagnostics.geminiApiVersion
+          }
+        />
+
+        <DiagnosticsMetric
+          label="Destino"
+          value={
+            diagnostics.geminiTarget
+          }
+        />
+      </div>
+
+      <div
+        style={{
+          marginTop: 11,
+          padding: 12,
+          borderRadius: 12,
+          background:
+            diagnostics.lastError
+              ? 'rgba(255, 101, 119, .08)'
+              : 'rgba(87, 229, 170, .06)',
+          border:
+            diagnostics.lastError
+              ? '1px solid rgba(255, 101, 119, .24)'
+              : '1px solid rgba(87, 229, 170, .16)',
+          color:
+            diagnostics.lastError
+              ? '#ffb4be'
+              : '#9de9c9',
+          fontSize: 12,
+          lineHeight: 1.45,
+          overflowWrap: 'anywhere',
+        }}
+      >
+        {diagnostics.lastError
+          ? `Último erro: ${diagnostics.lastError}${
+              diagnostics.lastErrorAt
+                ? ` · ${diagnostics.lastErrorAt}`
+                : ''
+            }`
+          : 'Sem erros técnicos registados nesta chamada.'}
+      </div>
+
+      <div
+        style={{
+          marginTop: 8,
+          color: '#718b99',
+          fontSize: 11,
+        }}
+      >
+        Modelo: {diagnostics.geminiModel} · candidato local:{' '}
+        {diagnostics.localCandidateType} · candidato remoto:{' '}
+        {diagnostics.remoteCandidateType}
+      </div>
+    </div>
+  );
+}
+
+/* -------------------- Aplicação -------------------- */
+
 export default function Home() {
   const [
     language,
@@ -491,6 +1018,23 @@ export default function Home() {
     setError,
   ] = useState('');
 
+  const [
+    liveDiagOpen,
+    setLiveDiagOpen,
+  ] = useState(false);
+
+  const [
+    liveDiagCopied,
+    setLiveDiagCopied,
+  ] = useState(false);
+
+  const [
+    liveDiagnostics,
+    setLiveDiagnostics,
+  ] = useState(
+    createLiveDiagnostics
+  );
+
   const localStreamRef =
     useRef(null);
 
@@ -533,6 +1077,24 @@ export default function Home() {
   const startedAtRef =
     useRef(null);
 
+  const liveStatsPreviousRef =
+    useRef(null);
+
+  const lastPeerStateRef =
+    useRef('new');
+
+  const peerEverConnectedRef =
+    useRef(false);
+
+  const peerInterruptedRef =
+    useRef(false);
+
+  const geminiStartedAtRef =
+    useRef(null);
+
+  const lastInputTranscriptionAtRef =
+    useRef(null);
+
   const selected = useMemo(
     () =>
       LANGUAGES.find(
@@ -544,6 +1106,310 @@ export default function Home() {
 
   const isGuest =
     role === 'guest';
+
+  function updateLiveDiagnostics(
+    patch
+  ) {
+    setLiveDiagnostics(
+      (previous) => ({
+        ...previous,
+        ...patch,
+        updatedAt:
+          new Date().toISOString(),
+      })
+    );
+  }
+
+  function recordTechnicalError(
+    message
+  ) {
+    if (!message) return;
+
+    updateLiveDiagnostics({
+      lastError: String(message),
+      lastErrorAt:
+        new Date().toLocaleTimeString(
+          'pt-PT'
+        ),
+    });
+  }
+
+  function resetLiveDiagnostics() {
+    liveStatsPreviousRef.current =
+      null;
+
+    lastPeerStateRef.current =
+      'new';
+
+    peerEverConnectedRef.current =
+      false;
+
+    peerInterruptedRef.current =
+      false;
+
+    geminiStartedAtRef.current =
+      null;
+
+    lastInputTranscriptionAtRef.current =
+      null;
+
+    setLiveDiagnostics(
+      createLiveDiagnostics()
+    );
+
+    setLiveDiagCopied(false);
+  }
+
+  async function refreshCallStats() {
+    const pc =
+      callPcRef.current;
+
+    if (
+      !pc ||
+      pc.connectionState ===
+        'closed'
+    ) {
+      return;
+    }
+
+    try {
+      const report =
+        await pc.getStats();
+
+      const pair =
+        findSelectedCandidatePair(
+          report
+        );
+
+      const localCandidate =
+        pair?.localCandidateId
+          ? report.get(
+              pair.localCandidateId
+            )
+          : null;
+
+      const remoteCandidate =
+        pair?.remoteCandidateId
+          ? report.get(
+              pair.remoteCandidateId
+            )
+          : null;
+
+      const {
+        inbound,
+        outbound,
+      } = findAudioStats(
+        report
+      );
+
+      const now =
+        performance.now();
+
+      const inboundBytes =
+        Number(
+          inbound?.bytesReceived ||
+            0
+        );
+
+      const outboundBytes =
+        Number(
+          outbound?.bytesSent ||
+            0
+        );
+
+      const previous =
+        liveStatsPreviousRef.current;
+
+      let inboundKbps = null;
+      let outboundKbps = null;
+
+      if (
+        previous &&
+        now > previous.at
+      ) {
+        const deltaMs =
+          now - previous.at;
+
+        inboundKbps =
+          ((inboundBytes -
+            previous.inboundBytes) *
+            8) /
+          deltaMs;
+
+        outboundKbps =
+          ((outboundBytes -
+            previous.outboundBytes) *
+            8) /
+          deltaMs;
+
+        if (
+          inboundKbps < 0
+        ) {
+          inboundKbps = null;
+        }
+
+        if (
+          outboundKbps < 0
+        ) {
+          outboundKbps = null;
+        }
+      }
+
+      liveStatsPreviousRef.current =
+        {
+          at: now,
+          inboundBytes,
+          outboundBytes,
+        };
+
+      const packetsReceived =
+        Number(
+          inbound?.packetsReceived ||
+            0
+        );
+
+      const packetsLost =
+        Math.max(
+          0,
+          Number(
+            inbound?.packetsLost ||
+              0
+          )
+        );
+
+      const packetTotal =
+        packetsReceived +
+        packetsLost;
+
+      const lossPct =
+        packetTotal > 0
+          ? (packetsLost /
+              packetTotal) *
+            100
+          : null;
+
+      let rttMs = null;
+
+      if (
+        Number.isFinite(
+          pair?.currentRoundTripTime
+        )
+      ) {
+        rttMs =
+          pair.currentRoundTripTime *
+          1000;
+      } else if (
+        Number.isFinite(
+          pair?.totalRoundTripTime
+        ) &&
+        Number(
+          pair?.responsesReceived
+        ) > 0
+      ) {
+        rttMs =
+          (pair.totalRoundTripTime /
+            pair.responsesReceived) *
+          1000;
+      }
+
+      const jitterMs =
+        Number.isFinite(
+          inbound?.jitter
+        )
+          ? inbound.jitter * 1000
+          : null;
+
+      const audioLevel =
+        Number.isFinite(
+          inbound?.audioLevel
+        )
+          ? Math.max(
+              0,
+              Math.min(
+                100,
+                inbound.audioLevel *
+                  100
+              )
+            )
+          : null;
+
+      const protocol =
+        localCandidate?.protocol ||
+        pair?.protocol ||
+        '—';
+
+      updateLiveDiagnostics({
+        webRtcState:
+          pc.connectionState,
+        iceState:
+          pc.iceConnectionState,
+        signalingState:
+          pc.signalingState,
+        connectionPath:
+          pair
+            ? candidatePath(
+                localCandidate,
+                remoteCandidate
+              )
+            : 'A determinar…',
+        candidateProtocol:
+          String(protocol),
+        localCandidateType:
+          localCandidate
+            ?.candidateType ||
+          '—',
+        remoteCandidateType:
+          remoteCandidate
+            ?.candidateType ||
+          '—',
+        rttMs: rounded(
+          numericOrNull(rttMs),
+          0
+        ),
+        jitterMs: rounded(
+          numericOrNull(
+            jitterMs
+          ),
+          1
+        ),
+        packetLossPct:
+          rounded(
+            numericOrNull(
+              lossPct
+            ),
+            2
+          ),
+        inboundKbps: rounded(
+          numericOrNull(
+            inboundKbps
+          ),
+          1
+        ),
+        outboundKbps: rounded(
+          numericOrNull(
+            outboundKbps
+          ),
+          1
+        ),
+        inboundAudioLevelPct:
+          rounded(
+            numericOrNull(
+              audioLevel
+            ),
+            0
+          ),
+        geminiWsState:
+          wsStateLabel(
+            geminiWsRef.current
+          ),
+      });
+    } catch (statsError) {
+      console.warn(
+        'Diagnóstico WebRTC getStats:',
+        statsError
+      );
+    }
+  }
 
   useEffect(() => {
     const params =
@@ -645,6 +1511,26 @@ export default function Home() {
     }
   }, [hearOriginal]);
 
+  useEffect(() => {
+    if (!connected) {
+      liveStatsPreviousRef.current =
+        null;
+
+      return;
+    }
+
+    refreshCallStats();
+
+    const timer =
+      setInterval(
+        refreshCallStats,
+        2000
+      );
+
+    return () =>
+      clearInterval(timer);
+  }, [connected]);
+
   async function ensureMic() {
     if (
       localStreamRef.current
@@ -679,6 +1565,15 @@ export default function Home() {
       );
 
     callPcRef.current = pc;
+
+    updateLiveDiagnostics({
+      webRtcState:
+        pc.connectionState,
+      iceState:
+        pc.iceConnectionState,
+      signalingState:
+        pc.signalingState,
+    });
 
     stream
       .getAudioTracks()
@@ -719,6 +1614,10 @@ export default function Home() {
             translationError
           );
 
+          recordTechnicalError(
+            translationError.message
+          );
+
           stopGeminiTranslation();
 
           setError(
@@ -728,14 +1627,78 @@ export default function Home() {
       );
     };
 
+    pc.oniceconnectionstatechange =
+      () => {
+        updateLiveDiagnostics({
+          iceState:
+            pc.iceConnectionState,
+        });
+      };
+
+    pc.onsignalingstatechange =
+      () => {
+        updateLiveDiagnostics({
+          signalingState:
+            pc.signalingState,
+        });
+      };
+
     pc.onconnectionstatechange =
       () => {
         const state =
           pc.connectionState;
 
+        const previousState =
+          lastPeerStateRef.current;
+
+        updateLiveDiagnostics({
+          webRtcState: state,
+          iceState:
+            pc.iceConnectionState,
+          signalingState:
+            pc.signalingState,
+        });
+
+        if (
+          state ===
+            'disconnected' ||
+          state === 'failed'
+        ) {
+          if (
+            peerEverConnectedRef.current
+          ) {
+            peerInterruptedRef.current =
+              true;
+          }
+        }
+
         if (
           state === 'connected'
         ) {
+          if (
+            peerEverConnectedRef.current &&
+            peerInterruptedRef.current
+          ) {
+            setLiveDiagnostics(
+              (previous) => ({
+                ...previous,
+                reconnects:
+                  previous.reconnects +
+                  1,
+                webRtcState:
+                  state,
+                updatedAt:
+                  new Date().toISOString(),
+              })
+            );
+
+            peerInterruptedRef.current =
+              false;
+          }
+
+          peerEverConnectedRef.current =
+            true;
+
           setConnected(true);
 
           setBusy(false);
@@ -743,11 +1706,7 @@ export default function Home() {
           setStatus(
             'Chamada ligada — tradução em tempo real'
           );
-
-          return;
-        }
-
-        if (
+        } else if (
           state === 'failed'
         ) {
           setConnected(false);
@@ -758,29 +1717,30 @@ export default function Home() {
             'Ligação falhou'
           );
 
-          setError(
-            'Não foi possível estabelecer a ligação WebRTC. Verifique a rede ou o serviço TURN.'
+          const message =
+            'Não foi possível estabelecer a ligação WebRTC. Verifique a rede ou o serviço TURN.';
+
+          recordTechnicalError(
+            message
           );
 
-          return;
-        }
-
-        if (
+          setError(message);
+        } else if (
           state ===
           'disconnected'
         ) {
           setStatus(
             'Ligação interrompida — a tentar recuperar…'
           );
-
-          return;
-        }
-
-        if (
+        } else if (
           state === 'closed'
         ) {
           setConnected(false);
         }
+
+        lastPeerStateRef.current =
+          state ||
+          previousState;
       };
 
     return pc;
@@ -912,6 +1872,8 @@ export default function Home() {
     pollAbortRef.current =
       false;
 
+    resetLiveDiagnostics();
+
     try {
       const newRoom =
         randomRoom();
@@ -1017,6 +1979,10 @@ export default function Home() {
         callError
       );
 
+      recordTechnicalError(
+        callError.message
+      );
+
       setBusy(false);
 
       setStatus(
@@ -1037,6 +2003,8 @@ export default function Home() {
 
     pollAbortRef.current =
       false;
+
+    resetLiveDiagnostics();
 
     try {
       setStatus(
@@ -1097,6 +2065,10 @@ export default function Home() {
     } catch (callError) {
       console.error(
         callError
+      );
+
+      recordTechnicalError(
+        callError.message
       );
 
       setBusy(false);
@@ -1174,6 +2146,13 @@ export default function Home() {
     geminiReadyRef.current =
       false;
 
+    updateLiveDiagnostics({
+      geminiSetupComplete:
+        false,
+      geminiWsState:
+        'fechado',
+    });
+
     if (
       geminiProcessorRef.current
     ) {
@@ -1248,6 +2227,12 @@ export default function Home() {
 
     geminiNextPlayTimeRef.current =
       0;
+
+    geminiStartedAtRef.current =
+      null;
+
+    lastInputTranscriptionAtRef.current =
+      null;
   }
 
   async function startTranslation(
@@ -1263,6 +2248,18 @@ export default function Home() {
       isGuest
         ? language
         : 'pt';
+
+    geminiStartedAtRef.current =
+      performance.now();
+
+    updateLiveDiagnostics({
+      geminiWsState:
+        'a preparar sessão',
+      geminiSetupComplete:
+        false,
+      geminiTarget:
+        targetLanguage,
+    });
 
     setStatus(
       'Chamada ligada — a iniciar Gemini Live Translate…'
@@ -1323,6 +2320,18 @@ export default function Home() {
         'A sessão Gemini não devolveu o idioma de destino.'
       );
     }
+
+    updateLiveDiagnostics({
+      geminiApiVersion:
+        session.apiVersion ||
+        'v1alpha',
+      geminiModel:
+        session.model,
+      geminiTarget:
+        session.targetLanguageCode,
+      geminiWsState:
+        'a ligar',
+    });
 
     const AudioContextClass =
       window.AudioContext ||
@@ -1469,6 +2478,10 @@ export default function Home() {
             'Erro ao enviar áudio Gemini:',
             sendError
           );
+
+          recordTechnicalError(
+            `Envio áudio Gemini: ${sendError.message}`
+          );
         }
       };
 
@@ -1503,6 +2516,10 @@ export default function Home() {
               timeout
             );
 
+            recordTechnicalError(
+              message
+            );
+
             reject(
               new Error(
                 message
@@ -1524,6 +2541,11 @@ export default function Home() {
           console.log(
             'WebSocket Gemini aberto.'
           );
+
+          updateLiveDiagnostics({
+            geminiWsState:
+              'aberto',
+          });
 
           const setup = {
             setup: {
@@ -1597,6 +2619,10 @@ export default function Home() {
                     message.error
                   );
 
+                recordTechnicalError(
+                  `Gemini Live: ${detail}`
+                );
+
                 setError(
                   `Gemini Live: ${detail}`
                 );
@@ -1613,6 +2639,26 @@ export default function Home() {
               ) {
                 geminiReadyRef.current =
                   true;
+
+                const startupMs =
+                  geminiStartedAtRef.current
+                    ? performance.now() -
+                      geminiStartedAtRef.current
+                    : null;
+
+                updateLiveDiagnostics({
+                  geminiWsState:
+                    'aberto',
+                  geminiSetupComplete:
+                    true,
+                  geminiStartupMs:
+                    rounded(
+                      numericOrNull(
+                        startupMs
+                      ),
+                      0
+                    ),
+                });
 
                 setStatus(
                   'Chamada ligada — tradução Gemini em tempo real'
@@ -1633,6 +2679,9 @@ export default function Home() {
                   .inputTranscription
                   ?.text
               ) {
+                lastInputTranscriptionAtRef.current =
+                  performance.now();
+
                 appendTranscript(
                   setSourceText,
                   content
@@ -1646,6 +2695,25 @@ export default function Home() {
                   .outputTranscription
                   ?.text
               ) {
+                if (
+                  lastInputTranscriptionAtRef.current
+                ) {
+                  const latency =
+                    performance.now() -
+                    lastInputTranscriptionAtRef.current;
+
+                  updateLiveDiagnostics({
+                    translationLatencyMs:
+                      rounded(
+                        latency,
+                        0
+                      ),
+                  });
+
+                  lastInputTranscriptionAtRef.current =
+                    null;
+                }
+
                 appendTranscript(
                   setTranslatedText,
                   content
@@ -1682,6 +2750,10 @@ export default function Home() {
                 'Erro ao interpretar mensagem Gemini:',
                 messageError
               );
+
+              recordTechnicalError(
+                `Mensagem Gemini: ${messageError.message}`
+              );
             }
           };
 
@@ -1692,6 +2764,11 @@ export default function Home() {
             'WebSocket Gemini error:',
             event
           );
+
+          updateLiveDiagnostics({
+            geminiWsState:
+              'erro',
+          });
 
           finishReject(
             'Erro de comunicação com o WebSocket Gemini Live.'
@@ -1706,6 +2783,13 @@ export default function Home() {
 
           geminiReadyRef.current =
             false;
+
+          updateLiveDiagnostics({
+            geminiWsState:
+              'fechado',
+            geminiSetupComplete:
+              false,
+          });
 
           console.warn(
             'WebSocket Gemini fechado:',
@@ -1724,12 +2808,19 @@ export default function Home() {
           if (
             event.code !== 1000
           ) {
+            const message =
+              `Gemini Live desligou a tradução. Código ${event.code}${event.reason ? ` — ${event.reason}` : ''}`;
+
+            recordTechnicalError(
+              message
+            );
+
             setStatus(
               'Tradução Gemini desligada'
             );
 
             setError(
-              `Gemini Live desligou a tradução. Código ${event.code}${event.reason ? ` — ${event.reason}` : ''}`
+              message
             );
           }
         };
@@ -1793,6 +2884,47 @@ export default function Home() {
     setInstallPrompt(null);
   }
 
+  async function copyLiveDiagnostics() {
+    const report = {
+      app:
+        'ALOe Translate Call',
+      version:
+        'v1.2.0-develop-live-diagnostics',
+      generatedAt:
+        new Date().toISOString(),
+      role,
+      selectedLanguage:
+        language,
+      connected,
+      status,
+      diagnostics:
+        liveDiagnostics,
+      note:
+        'Sem API keys, tokens Gemini, credenciais TURN ou segredo da chamada.',
+      userAgent:
+        navigator.userAgent,
+    };
+
+    await navigator.clipboard
+      .writeText(
+        JSON.stringify(
+          report,
+          null,
+          2
+        )
+      );
+
+    setLiveDiagCopied(true);
+
+    setTimeout(
+      () =>
+        setLiveDiagCopied(
+          false
+        ),
+      2500
+    );
+  }
+
   function hangup() {
     pollAbortRef.current =
       true;
@@ -1835,6 +2967,8 @@ export default function Home() {
     setTranslatedText('');
 
     setError('');
+
+    setLiveDiagOpen(false);
 
     setStatus(
       'Chamada terminada'
@@ -2223,6 +3357,58 @@ export default function Home() {
 
           </div>
 
+          <div
+            style={{
+              marginTop: 16,
+              display: 'flex',
+              justifyContent: 'center',
+            }}
+          >
+            <button
+              type="button"
+              onClick={() =>
+                setLiveDiagOpen(
+                  (value) =>
+                    !value
+                )
+              }
+              style={{
+                border:
+                  '1px solid rgba(125, 217, 255, .25)',
+                borderRadius: 13,
+                padding: '10px 14px',
+                background:
+                  liveDiagOpen
+                    ? 'rgba(87, 229, 170, .12)'
+                    : 'rgba(255,255,255,.035)',
+                color:
+                  liveDiagOpen
+                    ? '#8ff0c7'
+                    : '#a9c4d2',
+                fontWeight: 800,
+                cursor: 'pointer',
+              }}
+            >
+              📊 {liveDiagOpen
+                ? 'Fechar diagnóstico'
+                : 'Diagnóstico da chamada'}
+            </button>
+          </div>
+
+          {liveDiagOpen && (
+            <LiveDiagnosticsPanel
+              diagnostics={
+                liveDiagnostics
+              }
+              onCopy={
+                copyLiveDiagnostics
+              }
+              copied={
+                liveDiagCopied
+              }
+            />
+          )}
+
         </section>
 
       )}
@@ -2273,7 +3459,7 @@ export default function Home() {
       <footer>
 
         <span>
-          ALOe Translate Call v1.2.0 · Gemini
+          ALOe Translate Call v1.2.0 · Gemini · develop diagnostics
         </span>
 
         <span>
